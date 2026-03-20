@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { GoogleGenAI, Type } from "@google/genai";
 import { motion } from "motion/react";
 import {
   ShieldCheck,
@@ -193,10 +192,36 @@ fraudulent_job
 -----------------------------------------------------
 
 CRITICAL RULES
-• Output strictly valid JSON
+• Output strictly valid JSON matching the schema below
 • Never fabricate company information
 • If uncertain choose Suspicious
-• Always explain decisions using signals`;
+• Always explain decisions using signals
+
+You MUST respond with ONLY a valid JSON object matching this exact schema:
+{
+  "validJobPosting": boolean,
+  "error": string or null,
+  "warning": string or null,
+  "instruction": string or null,
+  "extractedInformation": {
+    "jobTitle": string or null,
+    "companyName": string or null,
+    "jobLocation": string or null,
+    "salaryInformation": string or null,
+    "requiredSkills": [string] or null,
+    "contactEmail": string or null,
+    "companyWebsite": string or null,
+    "jobURL": string or null
+  },
+  "prediction": "Genuine" | "Suspicious" | "Scam",
+  "fraudScore": number (0-100),
+  "confidenceScore": number (0-100),
+  "domainReputation": "Trusted" | "Unknown" | "Suspicious",
+  "recruiterAuthenticity": "Authentic" | "Unverified" | "Suspicious",
+  "signals": [{ "type": "positive" | "warning" | "negative", "message": string }],
+  "reportScam": { "scamType": string, "riskLevel": string, "recommendedAction": string, "warningMessage": string } or null,
+  "datasetLabel": "legitimate_job" | "suspicious_job" | "fraudulent_job"
+}`;
 
 export default function JobGuard() {
   const [input, setInput] = useState("");
@@ -212,71 +237,35 @@ export default function JobGuard() {
     setResult(null);
 
     try {
-      const ai = new GoogleGenAI({
-        apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY,
-      });
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
-        contents: input,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              validJobPosting: { type: Type.BOOLEAN },
-              error: { type: Type.STRING },
-              warning: { type: Type.STRING },
-              instruction: { type: Type.STRING },
-              extractedInformation: {
-                type: Type.OBJECT,
-                properties: {
-                  jobTitle: { type: Type.STRING },
-                  companyName: { type: Type.STRING },
-                  jobLocation: { type: Type.STRING },
-                  salaryInformation: { type: Type.STRING },
-                  requiredSkills: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                  contactEmail: { type: Type.STRING },
-                  companyWebsite: { type: Type.STRING },
-                  jobURL: { type: Type.STRING },
-                },
-              },
-              prediction: { type: Type.STRING },
-              fraudScore: { type: Type.NUMBER },
-              confidenceScore: { type: Type.NUMBER },
-              domainReputation: { type: Type.STRING },
-              recruiterAuthenticity: { type: Type.STRING },
-              signals: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    type: { type: Type.STRING },
-                    message: { type: Type.STRING },
-                  },
-                },
-              },
-              reportScam: {
-                type: Type.OBJECT,
-                properties: {
-                  scamType: { type: Type.STRING },
-                  riskLevel: { type: Type.STRING },
-                  recommendedAction: { type: Type.STRING },
-                  warningMessage: { type: Type.STRING },
-                },
-              },
-              datasetLabel: { type: Type.STRING },
-            },
-          },
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.NEXT_PUBLIC_OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": typeof window !== "undefined" ? window.location.origin : "",
+          "X-Title": "JobGuard AI",
         },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages: [
+            { role: "system", content: SYSTEM_INSTRUCTION },
+            { role: "user", content: input },
+          ],
+          response_format: { type: "json_object" },
+          max_tokens: 4096,
+        }),
       });
 
-      if (response.text) {
-        setResult(JSON.parse(response.text));
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData?.error?.message || `API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const text = data.choices?.[0]?.message?.content;
+
+      if (text) {
+        setResult(JSON.parse(text));
       } else {
         setError("Failed to get a valid response from the model.");
       }
